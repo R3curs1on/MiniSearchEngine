@@ -1,6 +1,5 @@
 """
-crawler.py — BFS Web Crawler (SQLite version)
-No MySQL needed. DB is a single file: search_engine.db
+crawler.py — BFS Web Crawler (MySQL version)
 
 Run: python crawler.py --seed https://docs.python.org/3/ --max 100
 """
@@ -10,17 +9,17 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from collections import deque
-import sqlite3
 import time
 import re
 import argparse
 import logging
-import os
+import hashlib
+
+from db import get_db as get_mysql_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-DB_PATH          = os.path.join(os.path.dirname(__file__), "..", "search_engine.db")
 POLITENESS_DELAY = 1.0
 REQUEST_TIMEOUT  = 10
 USER_AGENT       = "MiniSearchBot/1.0"
@@ -28,45 +27,69 @@ USER_AGENT       = "MiniSearchBot/1.0"
 # ─── DB setup ─────────────────────────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")   # faster concurrent writes
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    return get_mysql_db()
+
+def url_hash(url):
+    return hashlib.sha256(url[:2000].encode("utf-8")).hexdigest()
 
 def setup_db():
     conn = get_db()
-    conn.executescript("""
+    cursor = conn.cursor()
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS pages (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            url        TEXT NOT NULL UNIQUE,
-            title      TEXT,
-            body_text  TEXT,
-            crawled_at TEXT DEFAULT (datetime('now'))
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
-
+            id BIGINT PRIMARY KEY AUTO_INCREMENT,
+            url VARCHAR(2000) NOT NULL,
+            url_hash CHAR(64) NOT NULL,
+            title VARCHAR(512),
+            body_text MEDIUMTEXT,
+            crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_pages_url_hash (url_hash),
+            KEY idx_pages_url (url(255))
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS crawl_log (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            url        TEXT,
-            status     INTEGER,
-            crawled_at TEXT DEFAULT (datetime('now'))
-        );
+            id BIGINT PRIMARY KEY AUTO_INCREMENT,
+            url VARCHAR(2000),
+            status INT,
+            crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
     conn.commit()
+    cursor.close()
     conn.close()
 
 def url_exists(conn, url):
-    row = conn.execute("SELECT 1 FROM pages WHERE url = ?", (url[:2000],)).fetchone()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM pages WHERE url_hash = %s LIMIT 1", (url_hash(url),))
+    row = cursor.fetchone()
+    cursor.close()
     return row is not None
 
 def save_page(conn, url, title, text):
-    conn.execute(
-        "INSERT OR IGNORE INTO pages (url, title, body_text) VALUES (?, ?, ?)",
-        (url[:2000], (title or url)[:512], text)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO pages (url, url_hash, title, body_text)
+        VALUES (%s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            url = VALUES(url),
+            title = VALUES(title),
+            body_text = VALUES(body_text)
+        """,
+        (url[:2000], url_hash(url), (title or url)[:512], text)
     )
     conn.commit()
+    cursor.close()
+
+def log_crawl(conn, url, status):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO crawl_log (url, status) VALUES (%s, %s)",
+        (url[:2000], status)
+    )
+    conn.commit()
+    cursor.close()
 
 # ─── Robots.txt cache ─────────────────────────────────────────────────────────
 
@@ -93,6 +116,13 @@ def extract_text(soup):
     raw = soup.get_text(separator=" ")
     return re.sub(r"\s+", " ", raw).strip()
 
+def extract_title(soup, fallback):
+    if not soup.title:
+        return fallback
+
+    title = soup.title.get_text(" ", strip=True)
+    return title or fallback
+
 def same_domain_links(base_url, soup):
     base_domain = urlparse(base_url).netloc
     links = []
@@ -115,7 +145,11 @@ def crawl(seed_url, max_pages=200):
 
     while queue and count < max_pages:
         url = queue.popleft()
-        if url in visited or not can_fetch(url):
+        if url in visited:
+            continue
+        if not can_fetch(url):
+            visited.add(url)
+            log_crawl(conn, url, 403)
             continue
         if url_exists(conn, url):
             visited.add(url)
@@ -134,6 +168,7 @@ def crawl(seed_url, max_pages=200):
                 allow_redirects=True
             )
             domain_ts[domain] = time.time()
+            log_crawl(conn, url, resp.status_code)
 
             if resp.status_code != 200:
                 visited.add(url); continue
@@ -141,7 +176,7 @@ def crawl(seed_url, max_pages=200):
                 visited.add(url); continue
 
             soup  = BeautifulSoup(resp.text, "lxml")
-            title = soup.title.string.strip() if soup.title else url
+            title = extract_title(soup, url)
             text  = extract_text(soup)
 
             if len(text) < 100:
@@ -157,6 +192,7 @@ def crawl(seed_url, max_pages=200):
 
         except Exception as e:
             log.warning(f"Failed {url}: {e}")
+            log_crawl(conn, url, 0)
             visited.add(url)
 
     log.info(f"Done. Crawled {count} pages.")

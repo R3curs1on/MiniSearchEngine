@@ -117,7 +117,13 @@
     box-shadow: 0 8px 24px rgba(0,0,0,0.08);
   }
   .suggest-item {
+    display: block;
+    width: 100%;
     padding: 10px 16px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    font-family: inherit;
     font-size: 14px;
     cursor: pointer;
     color: var(--muted);
@@ -275,7 +281,9 @@
 </div>
 
 <script>
-const API = "http://localhost:3001";
+const API = window.location.origin && window.location.origin !== "null"
+  ? window.location.origin
+  : "http://localhost:3001";
 let currentPage = 1;
 let currentQuery = "";
 let suggestTimer = null;
@@ -290,6 +298,10 @@ const paginEl     = document.getElementById("pagination");
 const suggestBox  = document.getElementById("suggest-box");
 const statsBar    = document.getElementById("stats-bar");
 const indexStats  = document.getElementById("index-stats");
+
+function clearChildren(node) {
+  while (node.firstChild) node.removeChild(node.firstChild);
+}
 
 // ── Load index stats on initial page ─────────────────────────────────────────
 async function loadStats() {
@@ -321,9 +333,15 @@ qEl.addEventListener("input", () => {
       const res   = await fetch(`${API}/suggest?q=${encodeURIComponent(val)}`);
       const terms = await res.json();
       if (!terms.length) { suggestBox.style.display = "none"; return; }
-      suggestBox.innerHTML = terms.map(t =>
-        `<div class="suggest-item" onclick="pickSuggest('${t}')">${t}</div>`
-      ).join("");
+      clearChildren(suggestBox);
+      terms.forEach(term => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "suggest-item";
+        item.textContent = term;
+        item.addEventListener("click", () => pickSuggest(term));
+        suggestBox.appendChild(item);
+      });
       suggestBox.style.display = "block";
     } catch { suggestBox.style.display = "none"; }
   }, 200);
@@ -356,10 +374,10 @@ async function doSearch(query, page) {
   heroEl.classList.add("shrunk");
   indexStats.style.display = "none";
   loadingEl.style.display  = "block";
-  listEl.innerHTML         = "";
+  clearChildren(listEl);
   metaEl.style.display     = "none";
   emptyEl.style.display    = "none";
-  paginEl.innerHTML        = "";
+  clearChildren(paginEl);
 
   try {
     const res  = await fetch(`${API}/search?q=${encodeURIComponent(query)}&page=${page}&limit=10`);
@@ -373,25 +391,63 @@ async function doSearch(query, page) {
     metaEl.innerHTML = `About <strong>${data.total.toLocaleString()}</strong> results &nbsp;·&nbsp; ${data.took_ms}ms`;
     metaEl.style.display = "block";
 
-    listEl.innerHTML = data.results.map((r, i) => `
-      <div class="result-card" style="animation-delay:${i * 40}ms">
-        <div class="result-url">${r.url}</div>
-        <div class="result-title"><a href="${r.url}" target="_blank" rel="noopener">${r.title}</a></div>
-        <div class="result-snippet">${r.snippet}</div>
-        <div class="result-meta">
-          <span>score: ${r.score}</span>
-          <span>coverage: ${(r.coverage * 100).toFixed(0)}%</span>
-          <span>terms matched: ${r.term_hits}</span>
-        </div>
-      </div>
-    `).join("");
+    clearChildren(listEl);
+    data.results.forEach((result, i) => {
+      listEl.appendChild(createResultCard(result, i));
+    });
 
     renderPagination(data.total, data.limit, page);
 
   } catch {
     loadingEl.style.display = "none";
-    listEl.innerHTML = `<p style="color:var(--muted);padding:2rem 0">Could not reach API. Is server.js running?</p>`;
+    clearChildren(listEl);
+    const error = document.createElement("p");
+    error.style.color = "var(--muted)";
+    error.style.padding = "2rem 0";
+    error.textContent = "Could not reach API. Is server.js running?";
+    listEl.appendChild(error);
   }
+}
+
+function createResultCard(result, index) {
+  const card = document.createElement("div");
+  card.className = "result-card";
+  card.style.animationDelay = `${index * 40}ms`;
+
+  const url = document.createElement("div");
+  url.className = "result-url";
+  url.textContent = result.url;
+
+  const title = document.createElement("div");
+  title.className = "result-title";
+  const link = document.createElement("a");
+  link.href = result.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = result.title;
+  title.appendChild(link);
+
+  const snippet = document.createElement("div");
+  snippet.className = "result-snippet";
+  snippet.innerHTML = result.snippet;
+
+  const meta = document.createElement("div");
+  meta.className = "result-meta";
+  [
+    `score: ${result.score}`,
+    `coverage: ${(result.coverage * 100).toFixed(0)}%`,
+    `terms matched: ${result.term_hits}`,
+  ].forEach(text => {
+    const span = document.createElement("span");
+    span.textContent = text;
+    meta.appendChild(span);
+  });
+
+  card.appendChild(url);
+  card.appendChild(title);
+  card.appendChild(snippet);
+  card.appendChild(meta);
+  return card;
 }
 
 function renderPagination(total, limit, current) {
@@ -399,9 +455,15 @@ function renderPagination(total, limit, current) {
   if (totalPages <= 1) return;
   const range = [];
   for (let p = Math.max(1, current - 2); p <= Math.min(totalPages, current + 2); p++) range.push(p);
-  paginEl.innerHTML = range.map(p =>
-    `<button class="page-btn ${p === current ? "active" : ""}" onclick="doSearch('${currentQuery}', ${p})">${p}</button>`
-  ).join("");
+  clearChildren(paginEl);
+  range.forEach(pageNum => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `page-btn ${pageNum === current ? "active" : ""}`;
+    button.textContent = pageNum;
+    button.addEventListener("click", () => doSearch(currentQuery, pageNum));
+    paginEl.appendChild(button);
+  });
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

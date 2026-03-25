@@ -1,22 +1,20 @@
 """
-indexer.py — TF-IDF Inverted Index Builder (SQLite version)
-Reads crawled pages from search_engine.db, builds the inverted index in-place.
+indexer.py — TF-IDF Inverted Index Builder (MySQL version)
+Reads crawled pages from MySQL and builds the inverted index in-place.
 
 Run: python indexer.py
 """
 
-import sqlite3
 import math
 import json
 import re
 import logging
-import os
 from collections import defaultdict
+
+from db import get_db as get_mysql_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
-
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "search_engine.db")
 
 STOPWORDS = set("""
 a about above after again against all am an and any are as at be because been
@@ -31,42 +29,40 @@ whom why will with you your
 # ─── DB connection ────────────────────────────────────────────────────────────
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA cache_size=-64000")   # 64MB cache
-    return conn
+    return get_mysql_db()
 
 def setup_index_tables(conn):
-    conn.executescript("""
+    cursor = conn.cursor()
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS terms (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            term     TEXT NOT NULL UNIQUE,
-            doc_freq INTEGER DEFAULT 0
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_terms_term ON terms(term);
-
+            id BIGINT PRIMARY KEY AUTO_INCREMENT,
+            term VARCHAR(255) NOT NULL,
+            doc_freq INT DEFAULT 0,
+            UNIQUE KEY uq_terms_term (term),
+            KEY idx_terms_term (term)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS postings (
-            term_id   INTEGER NOT NULL,
-            page_id   INTEGER NOT NULL,
-            tf_idf    REAL NOT NULL,
-            tf        REAL NOT NULL,
-            positions TEXT,
-            PRIMARY KEY (term_id, page_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_postings_term  ON postings(term_id);
-        CREATE INDEX IF NOT EXISTS idx_postings_score ON postings(term_id, tf_idf DESC);
-
+            term_id BIGINT NOT NULL,
+            page_id BIGINT NOT NULL,
+            tf_idf DOUBLE NOT NULL,
+            tf DOUBLE NOT NULL,
+            positions JSON,
+            PRIMARY KEY (term_id, page_id),
+            KEY idx_postings_term (term_id),
+            KEY idx_postings_score (term_id, tf_idf)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS page_rank (
-            page_id    INTEGER PRIMARY KEY,
-            score      REAL DEFAULT 1.0,
-            word_count INTEGER DEFAULT 0
-        );
+            page_id BIGINT PRIMARY KEY,
+            score DOUBLE DEFAULT 1.0,
+            word_count INT DEFAULT 0
+        )
     """)
     conn.commit()
+    cursor.close()
 
 # ─── Text processing ──────────────────────────────────────────────────────────
 
@@ -89,13 +85,17 @@ def get_positions(tokens, term):
 def build_index():
     conn = get_db()
     setup_index_tables(conn)
+    cursor = conn.cursor(dictionary=True)
 
     # Clear old index (re-index from scratch)
-    conn.executescript("DELETE FROM postings; DELETE FROM terms; DELETE FROM page_rank;")
+    cursor.execute("DELETE FROM postings")
+    cursor.execute("DELETE FROM terms")
+    cursor.execute("DELETE FROM page_rank")
     conn.commit()
 
     log.info("Loading pages...")
-    pages = conn.execute("SELECT id, title, body_text FROM pages").fetchall()
+    cursor.execute("SELECT id, title, body_text FROM pages")
+    pages = cursor.fetchall()
     N     = len(pages)
     log.info(f"Total pages: {N}")
 
@@ -118,16 +118,23 @@ def build_index():
 
     # ── Insert terms ──────────────────────────────────────────────────────────
     log.info(f"Inserting {len(df_map)} unique terms...")
-    conn.executemany(
-        "INSERT OR IGNORE INTO terms (term, doc_freq) VALUES (?, ?)",
+    insert_terms = conn.cursor()
+    insert_terms.executemany(
+        """
+        INSERT INTO terms (term, doc_freq)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq)
+        """,
         [(term, len(pages_set)) for term, pages_set in df_map.items()]
     )
     conn.commit()
+    insert_terms.close()
 
     # Load term id → id mapping
+    cursor.execute("SELECT id, term FROM terms")
     term_id_map = {
         row["term"]: row["id"]
-        for row in conn.execute("SELECT id, term FROM terms").fetchall()
+        for row in cursor.fetchall()
     }
 
     # ── Pass 2: compute TF-IDF and write postings ─────────────────────────────
@@ -159,28 +166,55 @@ def build_index():
             written += 1
 
             if len(postings_batch) >= BATCH_SIZE:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO postings (term_id, page_id, tf_idf, tf, positions) VALUES (?,?,?,?,?)",
+                postings_cursor = conn.cursor()
+                postings_cursor.executemany(
+                    """
+                    INSERT INTO postings (term_id, page_id, tf_idf, tf, positions)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        tf_idf = VALUES(tf_idf),
+                        tf = VALUES(tf),
+                        positions = VALUES(positions)
+                    """,
                     postings_batch
                 )
                 conn.commit()
+                postings_cursor.close()
                 postings_batch.clear()
                 log.info(f"  Written {written} postings...")
 
     # Flush remaining
     if postings_batch:
-        conn.executemany(
-            "INSERT OR REPLACE INTO postings (term_id, page_id, tf_idf, tf, positions) VALUES (?,?,?,?,?)",
+        postings_cursor = conn.cursor()
+        postings_cursor.executemany(
+            """
+            INSERT INTO postings (term_id, page_id, tf_idf, tf, positions)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                tf_idf = VALUES(tf_idf),
+                tf = VALUES(tf),
+                positions = VALUES(positions)
+            """,
             postings_batch
         )
+        postings_cursor.close()
     if page_rank_batch:
-        conn.executemany(
-            "INSERT OR REPLACE INTO page_rank (page_id, score, word_count) VALUES (?,?,?)",
+        page_rank_cursor = conn.cursor()
+        page_rank_cursor.executemany(
+            """
+            INSERT INTO page_rank (page_id, score, word_count)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                score = VALUES(score),
+                word_count = VALUES(word_count)
+            """,
             page_rank_batch
         )
+        page_rank_cursor.close()
     conn.commit()
 
     log.info(f"Indexing complete! Total postings: {written}")
+    cursor.close()
     conn.close()
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

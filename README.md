@@ -1,123 +1,69 @@
-# MiniSearch — SQLite Edition
+# MiniSearch — MySQL Edition
 
-> A mini search engine with zero external dependencies.
-> Crawl → Index → Search. Everything stored in one `search_engine.db` file.
-
----
+> Crawl -> Index -> Search. Data lives in MySQL instead of `search_engine.db`.
 
 ## How it works
 
-```
+```text
 python crawler.py --seed <URL>
-        │
-        ▼  search_engine.db (pages table)
+        |
+        v  MySQL (pages table)
 python indexer.py
-        │
-        ▼  search_engine.db (terms + postings + page_rank tables)
+        |
+        v  MySQL (terms + postings + page_rank tables)
 node server.js
-        │
-        ▼  http://localhost:3001
-   index.html  ← open in browser
+        |
+        v  http://localhost:3001
+   index.html
 ```
 
----
+## Setup
 
-## Folder structure
+1. Create a MySQL database and app user:
 
-```
-mini-search-engine/
-├── crawler/
-│   ├── crawler.py        # BFS crawler → writes to search_engine.db
-│   ├── indexer.py        # TF-IDF indexer → reads + writes search_engine.db
-│   └── requirements.txt  # requests, beautifulsoup4, lxml (sqlite3 is built-in)
-├── api/
-│   ├── server.js         # Express API using better-sqlite3
-│   └── package.json
-├── frontend/
-│   └── index.html        # Search UI — autocomplete, highlighting, pagination
-├── search_engine.db      # ← auto-created, single file holds everything
-└── README.md
+```sql
+CREATE DATABASE search_engine CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'mini_search'@'localhost' IDENTIFIED BY 'change_me';
+GRANT ALL PRIVILEGES ON search_engine.* TO 'mini_search'@'localhost';
+FLUSH PRIVILEGES;
 ```
 
----
-
-## Setup & run (3 steps)
-
-### Step 1 — Python crawler
+2. Configure environment variables:
 
 ```bash
-cd crawler
+cp .env.example .env
+```
 
-# create virtual env
+The Python scripts and `server.js` will auto-load values from `.env`. Exporting
+the same `MYSQL_*` variables in your shell still works if you prefer that.
+
+Do not use the MySQL `root` account for the app on Ubuntu/Mint unless you have
+explicitly configured password auth for it. The default `root` setup commonly
+uses socket auth and will fail from Python/Node clients with `Access denied`.
+
+3. Install dependencies:
+
+```bash
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# install dependencies (only 3 packages, sqlite3 is built-in)
+source venv/bin/activate
 pip install -r requirements.txt
 
-# crawl a website (search_engine.db auto-created in project root)
-python crawler.py --seed https://docs.python.org/3/ --max 100
-```
-
-### Step 2 — Build the index
-
-```bash
-# still inside crawler/ with venv active
-python indexer.py
-```
-
-### Step 3 — Start the API + open frontend
-
-```bash
-cd ../api
 npm install
-npm run dev
 ```
 
-Then open `http://localhost:3001` in your browser. Done!
+4. Run the pipeline:
 
----
-
-## No MySQL. No Postgres. No Redis.
-
-| Dependency | Status |
-|---|---|
-| MySQL / Postgres | ❌ Not needed |
-| Redis | ❌ Not needed |
-| sqlite3 (Python) | ✅ Built into Python stdlib |
-| better-sqlite3 (Node) | ✅ Auto-installed via npm |
-
-Everything lives in `search_engine.db` — copy the file, move the whole project.
-
----
-
-## Scoring formula
-
-```
-final_score = Σ(TF-IDF) × coverage × page_rank
-
-TF  = term count in doc / total tokens
-IDF = log(total docs / docs with term)
-coverage   = matched query terms / total query terms
-page_rank  = log(word_count + 1)
+```bash
+python crawler.py --seed https://docs.python.org/3/ --max 100
+python indexer.py
+node server.js
 ```
 
----
+Then open `http://localhost:3001/index.html`.
 
-## Resume bullet points
+## Notes
 
-- "Built a zero-dependency search engine crawling 10k+ pages with BFS and politeness controls"
-- "Implemented TF-IDF inverted index with multi-signal ranking (TF-IDF × coverage × page-rank)"
-- "Served sub-200ms ranked search results via REST API with autocomplete and snippet highlighting"
-
----
-
-## Extend it (bonus resume points)
-
-| Feature | What to do |
-|---|---|
-| Phrase search | Use stored `positions` column in postings |
-| Link graph PageRank | Extract all `<a>` hrefs during crawl, run iterative PageRank |
-| Query cache | Add an in-memory `Map` in server.js with TTL |
-| Multi-site crawl | Remove same-domain restriction in crawler |
-| Docker support | One `Dockerfile` + `docker-compose.yml` |
+- `crawler.py` creates the `pages` and `crawl_log` tables if they do not exist.
+- The `pages` table stores a SHA-256 `url_hash` for URL uniqueness because MySQL cannot safely index a full `VARCHAR(2000)` URL under `utf8mb4`.
+- `indexer.py` creates the `terms`, `postings`, and `page_rank` tables if they do not exist.
+- `server.js` reads MySQL connection details from the same `MYSQL_*` environment variables.
