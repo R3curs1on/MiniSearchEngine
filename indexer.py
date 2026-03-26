@@ -244,7 +244,6 @@ def build_index():
             tf-idf = tf * idf
                 we also get the term_id for the term from term_id_map to store in the postings table;
                 we get the positions of the term in the page from curr_tokens (which is dict <term, list<pos>>) and convert it to JSON format to store in the postings table;
-    
             '''
             tid = term_id_map.get(term)
             if not tid: continue
