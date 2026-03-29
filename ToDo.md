@@ -1,11 +1,13 @@
-Ranking (current one is weak)
+Ranking
 
-Right now:
+Completed:
 
-- [] TF-IDF only → mediocre
-- [] page_rank = log(length) → naive
+- [x] Replaced TF-IDF-only ranking with BM25.
+- [x] Added field boosting (title > body).
+- [x] Replaced `page_rank = log(length)` with graph-based score from crawl link edges.
 
-Upgrade path:
+Next upgrades:
 
-- [] BM25 (real-world standard)
-- [] field boosting (title > body)
+- [ ] Add phrase/proximity boost using stored term positions.
+- [ ] Add query spelling correction and typo-tolerant ranking.
+- [ ] Add scheduled incremental re-indexing workflow.

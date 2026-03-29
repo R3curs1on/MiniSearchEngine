@@ -4,48 +4,57 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MiniSearch</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="hero">
+  <div class="logo">Mini<span>Search</span></div>
+  <p id="tagline">Crawl -> Index -> Search with BM25 + field-aware ranking</p>
 
-  <div class="logo">Mini<span>Search</span> </div>
-  
   <div id="search-row">
-
     <div id="search-wrap">
-      <input id="q" type="text" placeholder="Search the indexed web…" autocomplete="off" spellcheck="false" />
-
+      <input id="q" type="text" placeholder="Search the indexed web..." autocomplete="off" spellcheck="false" />
       <div id="suggest-box"></div>
-
       <button id="btn-search" aria-label="Search">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="8.5" cy="8.5" r="5.5"/><line x1="13" y1="13" x2="18" y2="18"/>
         </svg>
       </button>
-      
     </div>
-
   </div>
 
   <div id="stats-bar"></div>
-
+  <div id="badge-row"></div>
 </div>
 
 <div id="results-area">
-
-  <div id="loading"><div class="spinner"></div></div>
-  <div id="meta"></div>
-  <div id="results-list"></div>
-  <div id="empty">
-    <div class="big">∅</div>
-    <p>No results found. Try different keywords.</p>
-  </div>
-  <div id="pagination"></div>
   <div id="index-stats"></div>
 
+  <div id="results-layout">
+    <section id="results-main">
+      <div id="loading"><div class="spinner"></div></div>
+      <div id="meta"></div>
+      <div id="results-list"></div>
+      <div id="empty">
+        <div class="big">No results</div>
+        <p>Try a broader query or different keywords.</p>
+      </div>
+      <div id="pagination"></div>
+    </section>
+
+    <aside id="side-panel">
+      <div class="side-card">
+        <h3>Recent Queries</h3>
+        <div id="history-list"></div>
+      </div>
+      <div class="side-card">
+        <h3>Live Metrics</h3>
+        <div id="metrics-box">No metrics yet.</div>
+      </div>
+    </aside>
+  </div>
 </div>
 
 <script src="script.js"></script>
