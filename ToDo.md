@@ -8,6 +8,6 @@ Completed:
 
 Next upgrades:
 
-- [ ] Add phrase/proximity boost using stored term positions.
-- [ ] Add query spelling correction and typo-tolerant ranking.
+- [x] Add phrase/proximity boost using stored term positions.
+- [x] Add query spelling correction and typo-tolerant ranking.
 - [ ] Add scheduled incremental re-indexing workflow.

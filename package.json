@@ -2,12 +2,12 @@
   "name": "mini-search-engine-api",
   "version": "1.0.0",
   "description": "TF-IDF search engine API — MySQL backend",
-  "main": "server.js",
+  "main": "backend/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
     "test:js": "node --test tests/search_utils.test.js",
-    "test:py": "python -m unittest tests/test_indexer_tokenizer.py",
+    "test:py": "python -m unittest discover -s tests -p 'test_*.py'",
     "test": "npm run test:js && npm run test:py",
     "pipeline": "bash scripts/run_pipeline.sh"
   },
