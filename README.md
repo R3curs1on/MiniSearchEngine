@@ -1,39 +1,54 @@
-# MiniSearch (Python + MySQL + Express + HTML/CSS/JS)
+# MiniSearch Engine
 
-Crawl -> Index -> Search with BM25 ranking, field boosting, graph-based page rank, spelling correction, and positional boosts.
+MiniSearch Engine is a full-stack web search system built with Python, MySQL, Node.js, and a browser UI. It crawls a corpus, builds a BM25 inverted index, computes PageRank from the link graph, and serves ranked results with typo correction, autocomplete, and result highlighting.
+
+This repository is designed like a production deliverable rather than a classroom demo:
+
+- Persistent MySQL schema for pages, crawl history, postings, PageRank, and index metadata
+- Deterministic reindexing pipeline
+- Spell correction and prefix suggestions backed by an in-memory lexicon
+- Health and metrics endpoints for operational visibility
+- Automated tests for the search utilities, crawler helpers, and tokenizer logic
 
 ## Architecture
 
 ```text
-python python/crawler.py --seed <URL> --max <N>
-        |
-        v  MySQL (pages + crawl_log + crawl_edges)
-python python/indexer.py
-        |
-        v  MySQL (terms + postings + page_rank + index_meta)
-node backend/server.js
-        |
-        v  http://localhost:3001/index.html
+scripts/python/crawler.py   ->  MySQL pages + crawl_log + crawl_edges
+scripts/python/indexer.py   ->  MySQL terms + postings + page_rank + index_meta
+backend/server.js           ->  Express API + static UI
+public/index.html           ->  Search interface
 ```
 
-## Ranking model
+The search API combines multiple signals at query time:
 
-- BM25 scoring (`k1`, `b`) with precomputed IDF in `terms.idf`.
-- Field boosting using weighted term frequency (`title_boost` > body weight).
-- Graph-based page rank from `crawl_edges` link graph (iterative damping model).
-- Final search score:
-  - `final_score = bm25_sum + page_rank_weight * page_rank + coverage_weight * coverage + phrase_weight * phrase_score + proximity_weight * proximity_score`
-- Tunables stored in `index_meta` so API/UI can show diagnostics.
+- BM25 relevance from title and body term frequency
+- Title boosting
+- PageRank from the crawl graph
+- Coverage scoring for multi-term queries
+- Phrase and proximity signals
+- Spell correction and autocomplete support
 
-## Prerequisites
+## Stack
 
 - Python 3.10+
 - Node.js 18+
 - MySQL 8+
+- Express for the API
+- Vanilla HTML, CSS, and JavaScript for the UI
 
-## Setup
+## Repository Layout
 
-1. Create database and app user:
+```text
+backend/        Express API and shared search helpers
+public/         Browser UI
+scripts/python/  Crawler, indexer, and MySQL connection helpers
+scripts/         End-to-end pipeline script
+tests/          JavaScript and Python tests
+```
+
+## Getting Started
+
+### 1. Create the database
 
 ```sql
 CREATE DATABASE search_engine CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -42,7 +57,7 @@ GRANT ALL PRIVILEGES ON search_engine.* TO 'mini_search'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-2. Configure environment:
+### 2. Configure environment variables
 
 ```bash
 cp .env.example .env
@@ -59,42 +74,65 @@ MYSQL_DATABASE=search_engine
 PORT=3001
 ```
 
-3. Install dependencies:
+### 3. Install dependencies
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 npm install
 ```
 
-## Run
+## Run the System
 
 ### Option A: Step by step
 
 ```bash
-python python/crawler.py --seed https://en.wikipedia.org/wiki/Main_Page --max 120 --fresh
-python python/indexer.py
+python3 scripts/python/crawler.py --seed https://en.wikipedia.org/wiki/Main_Page --max 120 --fresh
+python3 scripts/python/indexer.py
 node backend/server.js
 ```
 
 Open `http://localhost:3001/index.html`.
 
-### Option B: Single command pipeline
+### Option B: End-to-end pipeline
 
 ```bash
 npm run pipeline -- https://en.wikipedia.org/wiki/Main_Page 120
 ```
 
-The pipeline now passes `--fresh` by default so switching corpora replaces the old stored pages instead of mixing sources.
+The pipeline script:
 
-This runs:
+1. Crawls the seed URL
+2. Rebuilds the BM25/PageRank index
+3. Starts the API and UI server
 
-1. crawler
-2. indexer
-3. API/UI server
+By default it uses `--fresh` so switching corpora does not mix old content with the new crawl.
 
-## API endpoints
+## Search Experience
+
+The UI exposes:
+
+- Ranked search results with highlighted snippets
+- Search suggestions while typing
+- Typo correction for near-miss queries
+- Recent query history in local storage
+- Live corpus stats and runtime metrics
+
+Example request:
+
+```bash
+curl "http://localhost:3001/search?q=information%20retrieval&page=1&limit=5"
+```
+
+Example response includes:
+
+- `results` with score breakdowns
+- `diagnostics` with the active ranking strategy and parameters
+- `matched_terms`, `unmatched_terms`, and correction details
+- Pagination metadata
+
+## API Endpoints
 
 - `GET /search?q=<query>&page=1&limit=10`
 - `GET /suggest?q=<prefix>`
@@ -102,19 +140,26 @@ This runs:
 - `GET /metrics`
 - `GET /health`
 
-### Search example
+## Ranking Model
 
-```bash
-curl "http://localhost:3001/search?q=python%20decorators&page=1&limit=5"
-```
+MiniSearch is intentionally hybrid. It does not rely on a single signal.
 
-Search response includes:
+1. Query terms are tokenized and stopwords are removed.
+2. Each page is scored with BM25 using separate title and body term frequency.
+3. Title matches receive a configurable boost.
+4. PageRank contributes authority derived from the crawl graph.
+5. Coverage, phrase, and proximity signals improve ranking for multi-term queries.
+6. If a query looks misspelled, the lexicon suggests a correction before ranking.
 
-- ranked results
-- score signal breakdown (`bm25`, `page_rank`, `coverage`, `phrase`, `proximity`)
-- diagnostics (`strategy`, BM25 params, matched terms, corrections)
+The current ranking parameters are stored in `index_meta` so the API can expose them without hardcoding values in the frontend.
 
-## Tests
+## Reindexing Behavior
+
+- `scripts/python/indexer.py` drops and rebuilds the search tables on each run.
+- `pages` and crawl logs remain intact, so you can re-run the crawler and rebuild the index without losing history.
+- `index_meta` stores the current tuning values, corpus size, and the active ranking strategy.
+
+## Testing
 
 ```bash
 npm test
@@ -122,18 +167,28 @@ npm test
 
 This runs:
 
-- JS tests (`tests/search_utils.test.js`)
-- Python tests (`tests/test_indexer_tokenizer.py`, `tests/test_crawler_helpers.py`)
+- `tests/search_utils.test.js`
+- `tests/test_indexer_tokenizer.py`
+- `tests/test_crawler_helpers.py`
 
-## Re-indexing behavior
+## Troubleshooting
 
-- `python/indexer.py` rebuilds index tables (`terms`, `postings`, `page_rank`, `index_meta`) from current `pages` + `crawl_edges`.
-- `pages` and crawl history remain intact, so rerunning crawl + index refreshes ranking data without losing crawl logs.
+- If `npm test` cannot find Python, make sure `python3` is installed and available on your `PATH`.
+- If the server exits on startup, confirm that `.env` exists and that MySQL credentials are valid.
+- If crawl results look stale, rerun the crawler with `--fresh` before reindexing.
 
-## Files of interest
+## Why This Project Stands Out
 
-- `python/crawler.py`: crawler + crawl edge capture
-- `python/indexer.py`: BM25 index build + page rank computation
-- `backend/server.js`: Express API, diagnostics, metrics, health checks
-- `backend/search_utils.js`: shared tokenization/highlight helpers
-- `public/index.html`, `public/style.css`, `public/script.js`: frontend UI
+- It combines crawling, indexing, ranking, and serving into one coherent system.
+- It shows practical search engineering: BM25, PageRank, typo correction, snippets, and autocomplete.
+- It includes an operational story with health checks, metrics, and deterministic rebuilds.
+- It is documented and tested, which makes it easier to evaluate and maintain.
+
+## Files Worth Reviewing
+
+- `scripts/python/crawler.py`
+- `scripts/python/indexer.py`
+- `backend/server.js`
+- `backend/search_utils.js`
+- `public/script.js`
+- `public/style.css`

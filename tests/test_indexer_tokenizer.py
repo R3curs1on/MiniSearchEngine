@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 import sys
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "scripts" / "python"))
 
 from indexer import tokenize
 

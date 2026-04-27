@@ -1,7 +1,4 @@
-"""
-crawler.py - BFS Web Crawler (MySQL version)
-Run: python python/crawler.py --seed https://en.wikipedia.org/wiki/Main_Page --max 100
-"""
+"""BFS web crawler that stores pages, crawl logs, and link edges in MySQL."""
 
 import argparse
 import hashlib
@@ -25,21 +22,27 @@ POLITENESS_DELAY = 1.0
 REQUEST_TIMEOUT = 10
 DEFAULT_USER_AGENT = os.getenv("CRAWLER_USER_AGENT", "MiniIndexer/1.0 (+https://localhost/mini-search)")
 USER_AGENT = DEFAULT_USER_AGENT
+MAX_URL_LENGTH = 2000
+ROBOTS_CACHE = {}
 
 
 def get_db():
+    """Return a configured MySQL connection for crawler operations."""
     return get_mysql_db()
 
 
 def url_hash(url):
-    return hashlib.sha256(url[:2000].encode("utf-8")).hexdigest()
+    """Create a stable hash for a URL so duplicate pages can be deduplicated."""
+    return hashlib.sha256(url[:MAX_URL_LENGTH].encode("utf-8")).hexdigest()
 
 
 def setup_db():
+    """Create crawler tables if they do not already exist."""
     conn = get_db()
     cursor = conn.cursor()
 
-    create_table_pages_query =  """
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS pages (
             id BIGINT PRIMARY KEY AUTO_INCREMENT,
             url VARCHAR(2000) NOT NULL,
@@ -51,9 +54,9 @@ def setup_db():
             KEY idx_pages_url (url(255))
         )
         """
-    cursor.execute( create_table_pages_query )
-
-    create_table_crawl_log_query =  """
+    )
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS crawl_log (
             id BIGINT PRIMARY KEY AUTO_INCREMENT,
             url VARCHAR(2000),
@@ -61,9 +64,9 @@ def setup_db():
             crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
-    cursor.execute( create_table_crawl_log_query )
-
-    create_table_crawl_edges_query =  """
+    )
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS crawl_edges (
             source_url_hash CHAR(64) NOT NULL,
             target_url_hash CHAR(64) NOT NULL,
@@ -71,7 +74,7 @@ def setup_db():
             KEY idx_edges_target (target_url_hash)
         )
         """
-    cursor.execute( create_table_crawl_edges_query )
+    )
 
     conn.commit()
     cursor.close()
@@ -79,6 +82,7 @@ def setup_db():
 
 
 def reset_crawl_tables():
+    """Delete all crawl-time content while preserving table definitions."""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM crawl_edges")
@@ -90,6 +94,7 @@ def reset_crawl_tables():
 
 
 def url_exists(conn, url):
+    """Check whether a URL has already been stored in the pages table."""
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM pages WHERE url_hash = %s", (url_hash(url),))
     row = cursor.fetchone()
@@ -98,6 +103,7 @@ def url_exists(conn, url):
 
 
 def save_page(conn, url, title, text):
+    """Insert or refresh a crawled page."""
     cursor = conn.cursor()
     insert_query = """
         INSERT INTO pages (url, url_hash, title, body_text)
@@ -121,6 +127,7 @@ def save_page(conn, url, title, text):
 
 
 def save_edges(conn, source_url, links):
+    """Persist crawl graph edges for a source page."""
     if not links:
         return
     source_hash = url_hash(source_url)
@@ -130,12 +137,13 @@ def save_edges(conn, source_url, links):
         INSERT IGNORE INTO crawl_edges (source_url_hash, target_url_hash)
         VALUES (%s, %s)
         """
-    cursor.executemany(insert_query, rows)  
+    cursor.executemany(insert_query, rows)
     conn.commit()
     cursor.close()
 
 
 def log_crawl(conn, url, status):
+    """Record the HTTP status returned while crawling a URL."""
     cursor = conn.cursor()
     insert_query = """
         INSERT INTO crawl_log (url, status)
@@ -149,14 +157,12 @@ def log_crawl(conn, url, status):
     cursor.close()
 
 
-_robots_cache = {}
-
-
 def can_fetch(url, user_agent=USER_AGENT):
+    """Check robots.txt rules for a URL using the active crawler user agent."""
     parsed = urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     cache_key = (base, user_agent)
-    if cache_key not in _robots_cache:
+    if cache_key not in ROBOTS_CACHE:
         rp = RobotFileParser()
         robots_url = f"{base}/robots.txt"
         rp.set_url(robots_url)
@@ -179,16 +185,18 @@ def can_fetch(url, user_agent=USER_AGENT):
                 log.warning("robots.txt returned status %s for %s", resp.status_code, base)
         except Exception as exc:
             log.warning("robots.txt check failed for %s: %s", base, exc)
-        _robots_cache[cache_key] = rp
-    return _robots_cache[cache_key].can_fetch(user_agent, url)
+        ROBOTS_CACHE[cache_key] = rp
+    return ROBOTS_CACHE[cache_key].can_fetch(user_agent, url)
 
 
 def is_wikipedia_url(url):
+    """Return True when a URL points at the Wikipedia article namespace."""
     host = urlparse(url).netloc.lower()
     return host == "wikipedia.org" or host.endswith(".wikipedia.org")
 
 
 def wikipedia_article_url(url):
+    """Normalize a Wikipedia link to a crawlable article URL when possible."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
         return None
@@ -205,6 +213,7 @@ def wikipedia_article_url(url):
 
 
 def extract_text(soup, source_url=None):
+    """Extract visible article text while stripping navigation and boilerplate."""
     working_soup = soup
 
     if source_url and is_wikipedia_url(source_url):
@@ -236,6 +245,7 @@ def extract_text(soup, source_url=None):
 
 
 def extract_title(soup, fallback, source_url=None):
+    """Extract a page title with Wikipedia-specific handling when available."""
     if source_url and is_wikipedia_url(source_url):
         heading = soup.select_one("#firstHeading")
         if heading:
@@ -250,6 +260,7 @@ def extract_title(soup, fallback, source_url=None):
 
 
 def same_domain_links(base_url, soup):
+    """Return crawlable HTTP(S) links that stay on the source domain."""
     base_domain = urlparse(base_url).netloc
     links = []
     for a in soup.find_all("a", href=True):
@@ -269,6 +280,7 @@ def same_domain_links(base_url, soup):
 
 
 def crawl(seed_url, max_pages=200, refresh_existing=False, fresh=False, user_agent=USER_AGENT):
+    """Crawl pages breadth-first and persist pages, logs, and link edges."""
     setup_db()
     if fresh:
         log.info("Clearing existing crawl corpus before starting new crawl.")

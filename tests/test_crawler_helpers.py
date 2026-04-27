@@ -4,7 +4,7 @@ import sys
 
 from bs4 import BeautifulSoup
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "python"))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "scripts" / "python"))
 
 from crawler import extract_text, same_domain_links, wikipedia_article_url
 

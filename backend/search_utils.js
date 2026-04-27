@@ -1,3 +1,8 @@
+/**
+ * Shared search utilities for tokenization, highlighting, spell correction,
+ * and positional scoring.
+ */
+
 const STOPWORDS = new Set([
   "a","about","above","after","again","all","am","an","and","any","are","as",
   "at","be","because","been","before","being","below","between","both","but",
@@ -12,7 +17,18 @@ const STOPWORDS = new Set([
 ]);
 
 const MAX_PREFIX_SUGGESTIONS = 12;
+const SNIPPET_CONTEXT_CHARS = 80;
+const HTML_ESCAPE_MAP = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  "\"": "&quot;",
+  "'": "&#39;",
+};
 
+/**
+ * Tokenize a free-form query into lowercase search terms.
+ */
 function tokenize(query) {
   return String(query || "")
     .toLowerCase()
@@ -21,16 +37,16 @@ function tokenize(query) {
     .filter((term) => term.length >= 2 && !STOPWORDS.has(term));
 }
 
+/**
+ * Escape user-visible text before placing it into HTML.
+ */
 function escapeHtml(text) {
-  return String(text).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;",
-  })[char]);
+  return String(text).replace(/[&<>"']/g, (char) => HTML_ESCAPE_MAP[char]);
 }
 
+/**
+ * Build a short snippet and wrap matched terms in <mark>.
+ */
 function highlight(text, terms, snippetLen = 220) {
   if (!text) return "";
   const escapedTerms = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -46,7 +62,7 @@ function highlight(text, terms, snippetLen = 220) {
     return escapeHtml(baseSnippet);
   }
 
-  const start = Math.max(0, match.index - 80);
+  const start = Math.max(0, match.index - SNIPPET_CONTEXT_CHARS);
   const end = Math.min(text.length, start + snippetLen);
   const snippet = (start > 0 ? "..." : "") + text.slice(start, end) + (end < text.length ? "..." : "");
   regex.lastIndex = 0;
@@ -63,6 +79,9 @@ function highlight(text, terms, snippetLen = 220) {
   return html;
 }
 
+/**
+ * Trie node used for prefix suggestions.
+ */
 class TrieNode {
   constructor() {
     this.children = new Map();
@@ -71,6 +90,9 @@ class TrieNode {
   }
 }
 
+/**
+ * Prefix trie that stores the strongest weighted terms for each node.
+ */
 class Trie {
   constructor(limit = MAX_PREFIX_SUGGESTIONS) {
     this.root = new TrieNode();
@@ -97,6 +119,9 @@ class Trie {
   }
 }
 
+/**
+ * Keep only the highest-weighted terms for a given trie node.
+ */
 function updateTopTerms(list, term, weight, limit) {
   const existing = list.findIndex((entry) => entry.term === term);
   const nextEntry = { term, weight };
@@ -114,6 +139,9 @@ function updateTopTerms(list, term, weight, limit) {
   if (list.length > limit) list.length = limit;
 }
 
+/**
+ * Build character n-gram keys for fuzzy term lookup.
+ */
 function buildTermKeys(term) {
   const keys = new Set();
   const padded = `^${term}$`;
@@ -128,6 +156,9 @@ function buildTermKeys(term) {
   return [...keys];
 }
 
+/**
+ * Build the lexicon used for autocomplete and typo correction.
+ */
 function buildLexicon(rows) {
   const trie = new Trie();
   const terms = new Set();
@@ -157,12 +188,18 @@ function buildLexicon(rows) {
   };
 }
 
+/**
+ * Use a tighter edit-distance budget for short terms.
+ */
 function maxEditDistance(length) {
   if (length <= 4) return 1;
   if (length <= 8) return 2;
   return 3;
 }
 
+/**
+ * Compute Damerau-Levenshtein distance with an early exit threshold.
+ */
 function damerauLevenshtein(a, b, maxDistance = Infinity) {
   if (a === b) return 0;
   if (!a.length) return b.length;
@@ -216,6 +253,9 @@ function damerauLevenshtein(a, b, maxDistance = Infinity) {
   return matrix[a.length + 1][b.length + 1];
 }
 
+/**
+ * Pick the best spelling correction candidate for a single term.
+ */
 function pickCorrection(term, lexicon) {
   if (!lexicon || lexicon.terms.has(term) || term.length < 3) return null;
 
@@ -259,6 +299,9 @@ function pickCorrection(term, lexicon) {
   return best;
 }
 
+/**
+ * Correct a list of search terms using the current lexicon.
+ */
 function correctTerms(terms, lexicon) {
   const corrections = [];
   const nextTerms = [];
@@ -285,6 +328,9 @@ function correctTerms(terms, lexicon) {
   };
 }
 
+/**
+ * Check whether two sorted position lists contain an adjacent pair.
+ */
 function hasAdjacentPair(left, right) {
   let i = 0;
   let j = 0;
@@ -302,6 +348,9 @@ function hasAdjacentPair(left, right) {
   return false;
 }
 
+/**
+ * Determine whether a set of term positions contains an exact phrase match.
+ */
 function hasExactPhrase(lists) {
   if (!lists.length || lists.some((positions) => !positions.length)) return false;
   const lookup = lists.map((positions) => new Set(positions));
@@ -320,6 +369,9 @@ function hasExactPhrase(lists) {
   return false;
 }
 
+/**
+ * Measure the smallest span that covers every query term at least once.
+ */
 function smallestCoveringSpan(lists) {
   const merged = [];
   lists.forEach((positions, index) => {
@@ -353,6 +405,9 @@ function smallestCoveringSpan(lists) {
   return best;
 }
 
+/**
+ * Compute phrase and proximity signals within one field.
+ */
 function computeFieldSignals(queryTerms, positionsByTerm, field) {
   const lists = queryTerms.map((term) => positionsByTerm[term]?.[field] || []);
   if (lists.some((positions) => positions.length === 0)) {
@@ -379,6 +434,9 @@ function computeFieldSignals(queryTerms, positionsByTerm, field) {
   };
 }
 
+/**
+ * Aggregate positional signals across title and body fields.
+ */
 function computePositionalSignals(queryTerms, positionsByTerm) {
   if (!queryTerms || queryTerms.length < 2) {
     return {

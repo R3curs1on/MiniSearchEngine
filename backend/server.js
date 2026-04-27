@@ -17,6 +17,9 @@ const {
 const ROOT_DIR = path.join(__dirname, "..");
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 
+/**
+ * Load environment variables from the repository-local `.env` file when present.
+ */
 function loadDotEnv() {
   const envPath = path.join(ROOT_DIR, ".env");
   if (!fs.existsSync(envPath)) return;
@@ -37,6 +40,9 @@ function loadDotEnv() {
 
 loadDotEnv();
 
+/**
+ * Read a required environment variable and surface a setup error if it is missing.
+ */
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) {
@@ -48,6 +54,9 @@ function requireEnv(name) {
   return value;
 }
 
+/**
+ * Convert a value into a finite number, falling back to a default when needed.
+ */
 function toSafeNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -94,6 +103,52 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
+/**
+ * Build the structured diagnostics block returned by the search endpoint.
+ */
+function createSearchDiagnostics(ranking, requestedTerms, correction) {
+  return {
+    strategy: ranking.strategy,
+    params: {
+      k1: ranking.k1,
+      b: ranking.b,
+      title_boost: ranking.titleBoost,
+      page_rank_weight: ranking.pageRankWeight,
+      coverage_weight: ranking.coverageWeight,
+      phrase_weight: ranking.phraseWeight,
+      proximity_weight: ranking.proximityWeight,
+      avg_doc_len: ranking.avgDocLen,
+    },
+    requested_terms: requestedTerms,
+    search_terms: correction.terms,
+    correction_applied: correction.applied,
+    corrected_query: correction.applied ? correction.correctedQuery : null,
+    corrections: correction.corrections,
+    matched_terms: [],
+    unmatched_terms: [],
+    candidate_pool: 0,
+  };
+}
+
+/**
+ * Shape a search response consistently across empty and populated result sets.
+ */
+function buildSearchResponse({ rawQuery, searchQuery, total, page, limit, started, diagnostics, results }) {
+  return {
+    query: rawQuery,
+    search_query: searchQuery,
+    total,
+    page,
+    limit,
+    took_ms: Date.now() - started,
+    diagnostics,
+    results,
+  };
+}
+
+/**
+ * Load ranking tunables from MySQL with a short in-memory cache.
+ */
 async function loadRankingConfig(force = false) {
   const now = Date.now();
   if (!force && rankingConfigCache.expiresAt > now) return rankingConfigCache.value;
@@ -156,6 +211,9 @@ async function loadRankingConfig(force = false) {
   }
 }
 
+/**
+ * Load the autocomplete lexicon from MySQL with a short in-memory cache.
+ */
 async function loadTermLexicon(force = false) {
   const now = Date.now();
   if (!force && lexiconCache.expiresAt > now) return lexiconCache.value;
@@ -183,6 +241,9 @@ async function loadTermLexicon(force = false) {
   return lexiconCache.value;
 }
 
+/**
+ * Parse serialized term positions stored in the postings table.
+ */
 function parsePositions(value) {
   if (!value) return { title: [], body: [] };
 
@@ -230,39 +291,25 @@ app.get("/search", async (req, res) => {
   const lexicon = await loadTermLexicon();
   const correction = correctTerms(requestedTerms, lexicon);
   const terms = correction.terms;
-  const diagnostics = {
-    strategy: ranking.strategy,
-    params: {
-      k1: ranking.k1,
-      b: ranking.b,
-      title_boost: ranking.titleBoost,
-      page_rank_weight: ranking.pageRankWeight,
-      coverage_weight: ranking.coverageWeight,
-      phrase_weight: ranking.phraseWeight,
-      proximity_weight: ranking.proximityWeight,
-      avg_doc_len: ranking.avgDocLen,
-    },
-    requested_terms: requestedTerms,
-    search_terms: terms,
-    correction_applied: correction.applied,
-    corrected_query: correction.applied ? correction.correctedQuery : null,
-    corrections: correction.corrections,
-    matched_terms: [],
-    unmatched_terms: [],
-    candidate_pool: 0,
-  };
+  const searchQuery = correction.correctedQuery || rawQuery;
+  const diagnostics = createSearchDiagnostics(ranking, requestedTerms, {
+    ...correction,
+    terms,
+  });
 
   if (!rawQuery || !requestedTerms.length) {
-    return res.json({
-      query: rawQuery,
-      search_query: rawQuery,
-      total: 0,
-      page,
-      limit,
-      took_ms: Date.now() - started,
-      diagnostics,
-      results: [],
-    });
+    return res.json(
+      buildSearchResponse({
+        rawQuery,
+        searchQuery,
+        total: 0,
+        page,
+        limit,
+        started,
+        diagnostics,
+        results: [],
+      })
+    );
   }
 
   try {
@@ -273,20 +320,23 @@ app.get("/search", async (req, res) => {
     );
 
     const termMap = new Map(termRows.map((row) => [row.term, row]));
+    const termRowById = new Map(termRows.map((row) => [row.id, row]));
     diagnostics.matched_terms = terms.filter((term) => termMap.has(term));
     diagnostics.unmatched_terms = terms.filter((term) => !termMap.has(term));
 
     if (!termRows.length) {
-      return res.json({
-        query: rawQuery,
-        search_query: correction.correctedQuery || rawQuery,
+      return res.json(
+      buildSearchResponse({
+        rawQuery,
+        searchQuery,
         total: 0,
-        page,
-        limit,
-        took_ms: Date.now() - started,
-        diagnostics,
-        results: [],
-      });
+          page,
+          limit,
+          started,
+          diagnostics,
+          results: [],
+        })
+      );
     }
 
     const termIds = termRows.map((row) => row.id);
@@ -300,16 +350,18 @@ app.get("/search", async (req, res) => {
     );
 
     if (!candidateRows.length) {
-      return res.json({
-        query: rawQuery,
-        search_query: correction.correctedQuery || rawQuery,
+      return res.json(
+      buildSearchResponse({
+        rawQuery,
+        searchQuery,
         total: 0,
-        page,
-        limit,
-        took_ms: Date.now() - started,
-        diagnostics,
-        results: [],
-      });
+          page,
+          limit,
+          started,
+          diagnostics,
+          results: [],
+        })
+      );
     }
 
     diagnostics.candidate_pool = candidateRows.length;
@@ -346,7 +398,7 @@ app.get("/search", async (req, res) => {
       const positionsByTerm = {};
 
       rows.forEach((row) => {
-        const termRow = termRows.find((t) => t.id === row.term_id);
+        const termRow = termRowById.get(row.term_id);
         if (!termRow) return;
 
         const freqTitle = Number(row.freq_title || 0);
@@ -398,16 +450,18 @@ app.get("/search", async (req, res) => {
     const total = results.length;
     const sliced = results.slice(offset, offset + limit);
 
-    return res.json({
-      query: rawQuery,
-      search_query: correction.correctedQuery || rawQuery,
-      total,
-      page,
-      limit,
-      took_ms: Date.now() - started,
-      diagnostics,
-      results: sliced,
-    });
+    return res.json(
+      buildSearchResponse({
+        rawQuery,
+        searchQuery,
+        total,
+        page,
+        limit,
+        started,
+        diagnostics,
+        results: sliced,
+      })
+    );
   } catch (error) {
     return res.status(500).json({
       error: "search_failed",
@@ -427,6 +481,9 @@ app.get("/suggest", async (req, res) => {
   }
 });
 
+/**
+ * Return corpus and index statistics for the frontend dashboard.
+ */
 app.get("/stats", async (_req, res) => {
   try {
     const [[pages]] = await pool.query("SELECT COUNT(*) AS count FROM pages");
@@ -451,6 +508,9 @@ app.get("/stats", async (_req, res) => {
   }
 });
 
+/**
+ * Return runtime and crawl metrics.
+ */
 app.get("/metrics", async (_req, res) => {
   try {
     const [[crawlAttempts]] = await pool.query("SELECT COUNT(*) AS count FROM crawl_log");
@@ -473,10 +533,16 @@ app.get("/metrics", async (_req, res) => {
   }
 });
 
+/**
+ * Sleep for a fixed number of milliseconds.
+ */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Wait for MySQL to become available before starting the HTTP server.
+ */
 async function connectWithRetry(retries = 6, delayMs = 1500) {
   let lastError = null;
   for (let attempt = 1; attempt <= retries; attempt += 1) {

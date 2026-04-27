@@ -7,7 +7,7 @@
     "start": "node backend/server.js",
     "dev": "nodemon backend/server.js",
     "test:js": "node --test tests/search_utils.test.js",
-    "test:py": "python -m unittest discover -s tests -p 'test_*.py'",
+    "test:py": "python3 -m unittest discover -s tests -p 'test_*.py'",
     "test": "npm run test:js && npm run test:py",
     "pipeline": "bash scripts/run_pipeline.sh"
   },

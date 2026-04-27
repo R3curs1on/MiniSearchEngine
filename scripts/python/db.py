@@ -4,8 +4,12 @@ Shared MySQL connection helpers for the crawler and indexer.
 
 import os
 from pathlib import Path
+from typing import Any
 
-import mysql.connector
+try:
+    import mysql.connector as mysql_connector
+except ImportError:  # pragma: no cover - exercised when the DB driver is unavailable
+    mysql_connector = None
 
 
 def load_dotenv() -> None:
@@ -56,8 +60,13 @@ def get_mysql_config() -> dict:
     }
 
 
-def get_db() -> mysql.connector.MySQLConnection:
-    return mysql.connector.connect(
+def get_db() -> Any:
+    if mysql_connector is None:
+        raise RuntimeError(
+            "mysql-connector-python is required for crawler and indexer operations."
+        )
+
+    return mysql_connector.connect(
         **get_mysql_config(),
         autocommit=False,
         charset="utf8mb4",
