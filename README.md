@@ -10,6 +10,14 @@ This repository is designed like a production deliverable rather than a classroo
 - Health and metrics endpoints for operational visibility
 - Automated tests for the search utilities, crawler helpers, and tokenizer logic
 
+
+![Demo Image](./Demo/miniSearchEngine.png)
+
+
+
+
+![Demo GIF](./Demo/miniSearchEngineDemo-2026-04-2.gif)
+
 ## Architecture
 
 ```text
