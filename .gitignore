@@ -1,7 +1,18 @@
+# Local dependencies and virtualenvs
 node_modules/
 venv/
+.venv/
+
+# Python bytecode and caches
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Local secrets and runtime data
 .env
+.env.*
+!.env.example
 search_engine.db
+*.db
+.codex
+
 .DS_Store
